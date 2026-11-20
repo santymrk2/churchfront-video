@@ -171,7 +171,14 @@ the AVMATRIX frames byte for byte against ones confirmed on real switchers.
 to 5680) that pan, tilt, zoom, go to positions and presets, and answer position and exposure
 questions. http://localhost:8090 shows what each one points at on a drawn stage. With
 `CUEVIDEO_FAKECAMS=127.0.0.1` the app adds them on switcher inputs 1 to 3. They send no video,
-so camera tiles stay black and auto tracking can't run on them.
+so camera tiles stay black and auto tracking can't run on them, unless:
+
+`swift run FakeCamera` sends this Mac's webcam as NDI "Fake PTZ 1", cropped to where pretend
+camera 1 points (`--camera 2` for the second, and so on). The webcam's whole picture is the
+camera's widest shot, so panning and zooming move the crop the way a real camera's picture
+moves. With `CUEVIDEO_FAKECAMS`, the app takes "Fake PTZ 1" to 3 as the pretend cameras'
+pictures on its own, so Track follows whoever is in front of the webcam. It needs NDI Tools,
+and camera access for the Terminal.
 
 Keys: 1 to 0 put that source-row tile on Next, Shift plus a number cuts it to Live,
 Space cuts, Return fades, arrows move the camera on Next.

@@ -130,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             booth.ptz.cameras = cams
         }
         booth.store.attach(booth)
+        if env["CUEVIDEO_FAKECAMS"] != nil { SelfTest.watchFakeCameraPictures(booth.store) }
         AutoTracker.shared.attach()
         // Claude's way in (through the CueVideo MCP server). Not during self-tests, which
         // may run beside the real app.
