@@ -116,7 +116,8 @@ final class ATEMDriver: SwitcherDriver {
     // MARK: Connection
 
     func start() {
-        queue.async {
+        queue.async { [weak self] in
+            guard let self else { return }
             self.setLink(.connecting)
             if self.timer == nil {
                 let t = DispatchSource.makeTimerSource(flags: .strict, queue: self.queue)
