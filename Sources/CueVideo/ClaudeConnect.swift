@@ -99,5 +99,5 @@ enum ClaudeConnect {
     }
 
     /// What to say to Claude after connecting.
-    static let firstPrompt = "Help me set up Churchfront Video for our church. Find our ATEM switcher and PTZ cameras on the network, check with me which camera is which, and set them up."
+    static let firstPrompt = "Help me set up Churchfront Video for our church. Find our video switcher and PTZ cameras on the network, check with me which camera is which, and set them up."
 }

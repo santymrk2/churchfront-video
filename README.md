@@ -1,11 +1,12 @@
 # Churchfront Video
 
-A simple ATEM control surface for church booths, with PTZ camera control and live
+A simple switcher control surface for church booths (Blackmagic ATEM or AVMATRIX), with PTZ camera control and live
 camera previews. Part of the Churchfront App Suite (Churchfront Cues, Churchfront Screens,
 Churchfront Lights, Churchfront Tracks). Native macOS 14+, SwiftUI.
 
 - `Sources/CueATEM`: the shared engine. `ATEM.swift` speaks the ATEM network
-  protocol (UDP 9910) with two-way state; `PTZ.swift` drives Canon cameras over
+  protocol (UDP 9910) with two-way state; `AVMatrix.swift` does the same for AVMATRIX
+  switchers (UDP 19523) behind the same `ATEMClient`; `PTZ.swift` drives Canon cameras over
   Canon's HTTP control and VISCA cameras (VISCA over IP UDP 52381, or VISCA over
   TCP 5678); `CameraLogin.swift` keeps the cameras' admin login in the Keychain.
   Meant to be used by Churchfront Screens (slide actions) and Churchfront Cues too.
@@ -156,6 +157,12 @@ VISCA cameras, then
 runs every command, prints the state after each, and writes screenshots. Self-tests
 never write to the setup file. Never run the self-test against a switcher that is
 live on a service.
+
+For an AVMATRIX, `python3 Tools/fake_avmatrix.py` starts a pretend one, and
+`CUEVIDEO_HOST=127.0.0.1 CUEVIDEO_SWITCHER=avmatrix "./Churchfront Video.app/Contents/MacOS/CueVideo"`
+opens the app on it without touching the setup file. Typing in the pretend switcher's
+window (`p 3`, `v 2`, `c`, `f`) changes it as its front panel would. `swift test` checks
+the AVMATRIX frames byte for byte against ones confirmed on real switchers.
 
 Keys: 1 to 0 put that source-row tile on Next, Shift plus a number cuts it to Live,
 Space cuts, Return fades, arrows move the camera on Next.
