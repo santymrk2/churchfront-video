@@ -31,6 +31,25 @@ executable is still `CueVideo` and the bundle ID is still `com.churchfront.cuevi
 the Swift package, targets and folders keep their CueVideo names, so existing setups,
 permissions and scripts keep working.
 
+## AVMATRIX switchers
+
+Churchfront Video can run an AVMATRIX PVS0403U, HVS0403U or HVS0402U instead of an ATEM:
+Setup > Switcher > Kind > **AVMATRIX**, then the switcher's IP address (or `"switcher": "avmatrix"`
+and `atemHost` in the config file). `Sources/CueATEM/AVMatrix.swift` speaks AVMATRIX's own UDP
+protocol (commands to port 19523, the switcher's reports back to port 19522), and turns the
+switcher's state into the same one an ATEM gives, so everything else works the same way.
+
+- **What works:** inputs 1 to 4 and the pattern (as color bars) on Next and Live, Cut, Fade,
+  Fade to Black, tally, and with them the camera safeguards and auto tracking on the camera on
+  Next. A camera shown in a PIP that is on air counts as Live.
+- **What it doesn't have:** a T-bar, transition styles and rates, keys, DSKs, aux outputs,
+  macros, recording and streaming. Those parts of the app stay empty, and the Status log marks
+  any such command as not sent.
+- **One program at a time:** the switcher always reports to port 19522, so AVMATRIX's own
+  control software has to be closed on the Mac that runs Churchfront Video.
+- **Trying it without the switcher:** `python3 Tools/fake_avmatrix.py` is a pretend one on this
+  Mac (address 127.0.0.1); typing in its window changes it as the front panel would.
+
 ## Setup file
 
 Everything set up in the app is saved as plain JSON in

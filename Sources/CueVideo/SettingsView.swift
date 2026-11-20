@@ -43,7 +43,7 @@ enum SetupPage: String, CaseIterable, Identifiable {
     }
     var purpose: String {
         switch self {
-        case .switcher: return "Where the ATEM is, and which mix the operator runs."
+        case .switcher: return "Which switcher, where it is, and which mix the operator runs."
         case .sources: return "The tiles the operator can put on Next, left to right."
         case .keys: return "On and off buttons under Fade and Cut, such as lower thirds."
         case .cameras: return "The PTZ cameras, the switcher input each one feeds, and their saved shots."
@@ -104,7 +104,15 @@ struct SetupTab: View {
     // MARK: Switcher
 
     var switcher: some View {
-        Card(title: "ATEM switcher") {
+        Card(title: "Switcher") {
+            labeled("Kind") {
+                Segments(items: SwitcherKind.allCases.map { ($0.title, $0) },
+                         selection: Binding(get: { store.config.switcher }, set: { v in store.update { $0.switcher = v } }))
+                if store.config.switcher == .avmatrix {
+                    Text("PVS0403U, HVS0403U, HVS0402U. Close AVMATRIX's control software on this Mac.")
+                        .font(.sans(12)).foregroundStyle(T.inkMuted)
+                }
+            }
             labeled("Address") {
                 TextField("IP address", text: $host).textFieldStyle(CueFieldStyle()).frame(width: 200)
                     .onSubmit { store.update { $0.atemHost = host.trimmingCharacters(in: .whitespaces) } }
@@ -113,7 +121,7 @@ struct SetupTab: View {
                 LinkPill()
             }
             labeled("Model") {
-                Text(atem.state.product.isEmpty ? "Unknown until connected" : "\(atem.state.product), protocol \(atem.state.version)")
+                Text(atem.state.product.isEmpty ? "Unknown until connected" : (atem.state.version.isEmpty ? atem.state.product : "\(atem.state.product), protocol \(atem.state.version)"))
                     .font(.sans(13)).foregroundStyle(atem.state.product.isEmpty ? T.inkSubtle : T.ink)
             }
             if atem.state.meCount > 1 {

@@ -77,6 +77,17 @@ public struct ATEMState: Equatable {
     public func name(_ id: Int?) -> String { id.map { inputs[$0]?.short ?? "\($0)" } ?? "?" }
 }
 
+/// The kind of switcher ATEMClient talks to. Everything else in the app reads the same
+/// ATEMState whichever it is.
+public enum SwitcherKind: String, Codable, CaseIterable {
+    /// Blackmagic ATEM, over UDP 9910.
+    case atem
+    /// AVMATRIX PVS0403U, HVS0403U and HVS0402U, over UDP 19523 (see AVMatrix.swift).
+    case avmatrix
+
+    public var title: String { self == .atem ? "ATEM" : "AVMATRIX" }
+}
+
 public enum ATEMLink: Equatable {
     case idle
     case connecting
@@ -123,6 +134,7 @@ public final class ATEMClient: ObservableObject {
     @Published public private(set) var state = ATEMState()
     @Published public private(set) var link: ATEMLink = .idle
     @Published public private(set) var host = ""
+    @Published public private(set) var kind: SwitcherKind = .atem
     /// Which end of the T-bar is at rest, per M/E. Flips when a transition
     /// finishes, as on a hardware panel.
     @Published public private(set) var tbarAtTop: [Int: Bool] = [:]
@@ -145,6 +157,8 @@ public final class ATEMClient: ObservableObject {
     private var timer: DispatchSourceTimer?
     private var s = ATEMState()
     private var lastPosition: [Int: Double] = [:]
+    /// The AVMATRIX connection, while the switcher is an AVMATRIX.
+    private var avm: AVMatrixLink?
 
     private enum Flag {
         static let ackRequest: UInt8 = 0x01, newSession: UInt8 = 0x02, retransmit: UInt8 = 0x04
@@ -156,10 +170,33 @@ public final class ATEMClient: ObservableObject {
 
     // MARK: Connection
 
-    public func connect(_ host: String, port: UInt16 = 9910) {
+    public func connect(_ host: String, port: UInt16 = 9910, kind: SwitcherKind = .atem) {
         let h = host.trimmingCharacters(in: .whitespaces)
         self.host = h
+        self.kind = kind
         link = h.isEmpty ? .idle : .connecting
+        avm?.stop()
+        avm = nil
+        if kind == .avmatrix {
+            state = ATEMState()
+            queue.async {
+                self.target = ""
+                self.timer?.cancel(); self.timer = nil
+                self.conn?.cancel(); self.conn = nil
+                self.connected = false; self.ready = false
+            }
+            guard !h.isEmpty else { return }
+            let a = AVMatrixLink(host: h)
+            a.onState = { [weak self, weak a] st in
+                DispatchQueue.main.async { if let self, self.avm === a, self.state != st { self.state = st } }
+            }
+            a.onLink = { [weak self, weak a] l in
+                DispatchQueue.main.async { if let self, self.avm === a, self.link != l { self.link = l } }
+            }
+            avm = a
+            a.start()
+            return
+        }
         queue.async {
             self.target = h
             self.port = port
@@ -179,6 +216,8 @@ public final class ATEMClient: ObservableObject {
     public func disconnect() {
         host = ""
         link = .idle
+        avm?.stop()
+        avm = nil
         queue.async {
             self.target = ""
             self.timer?.cancel(); self.timer = nil
@@ -215,7 +254,7 @@ public final class ATEMClient: ObservableObject {
     }
 
     private func setLink(_ l: ATEMLink) {
-        DispatchQueue.main.async { if self.link != l && !self.target.isEmpty { self.link = l } }
+        DispatchQueue.main.async { if self.avm == nil && self.link != l && !self.target.isEmpty { self.link = l } }
     }
 
     private func tick() {
@@ -384,7 +423,7 @@ public final class ATEMClient: ObservableObject {
 
     private func publish() {
         let snap = s
-        DispatchQueue.main.async { if self.state != snap { self.state = snap } }
+        DispatchQueue.main.async { if self.avm == nil && self.state != snap { self.state = snap } }
     }
 
     // MARK: Commands
@@ -395,6 +434,16 @@ public final class ATEMClient: ObservableObject {
     }
 
     private func send(_ name: String, _ data: [UInt8]) {
+        if let avm {
+            // An AVMATRIX does what it has an equivalent for; the rest is logged as not sent.
+            let ok = avm.perform(name, data)
+            let entry = ATEMLogEntry(time: Date(), command: name, data: data, sent: ok)
+            DispatchQueue.main.async {
+                self.sentLog.append(entry)
+                if self.sentLog.count > 60 { self.sentLog.removeFirst(self.sentLog.count - 60) }
+            }
+            return
+        }
         queue.async {
             let ok = self.connected && self.ready
             let entry = ATEMLogEntry(time: Date(), command: name, data: data, sent: ok)

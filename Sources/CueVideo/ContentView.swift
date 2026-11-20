@@ -231,12 +231,16 @@ struct ConnectView: View {
     @EnvironmentObject var store: ConfigStore
     @EnvironmentObject var atem: ATEMClient
     @State private var host = Booth.shared.store.config.atemHost
+    @State private var kind = Booth.shared.store.config.switcher
 
     var body: some View {
         VStack(spacing: T.s4) {
             Spacer()
-            Text("Connect to your ATEM").font(.sans(26, .bold))
-            Text("Churchfront Video talks to the switcher directly over your network. No Blackmagic software needed.\nFind the switcher's IP address in ATEM Setup under Network.")
+            Text("Connect to your switcher").font(.sans(26, .bold))
+            Segments(items: SwitcherKind.allCases.map { ($0.title, $0) }, selection: $kind)
+            Text(kind == .atem
+                 ? "Churchfront Video talks to the switcher directly over your network. No Blackmagic software needed.\nFind the switcher's IP address in ATEM Setup under Network."
+                 : "Churchfront Video talks to the switcher directly over your network (PVS0403U, HVS0403U, HVS0402U).\nFind its IP address in the switcher's menu under Network, and close AVMATRIX's control software on this Mac.")
                 .font(.sans(14)).foregroundStyle(T.inkMuted).multilineTextAlignment(.center)
             HStack {
                 TextField("Such as 192.168.1.240", text: $host)
@@ -267,6 +271,6 @@ struct ConnectView: View {
     }
 
     func go() {
-        Booth.shared.store.update { $0.atemHost = host.trimmingCharacters(in: .whitespaces) }
+        Booth.shared.store.update { $0.switcher = kind; $0.atemHost = host.trimmingCharacters(in: .whitespaces) }
     }
 }

@@ -121,6 +121,7 @@ struct RouteButton: Codable, Hashable, Identifiable {
 /// written by hand.
 ///
 ///     {
+///       "switcher": "atem",
 ///       "atemHost": "192.168.1.240",
 ///       "me": 1,
 ///       "sources": [ { "input": 9, "label": "Cam 1" }, { "input": 3, "label": "Graphics", "ndi": "GRAPHICS-MAC (CueScreens Stream)" } ],
@@ -133,8 +134,12 @@ struct RouteButton: Codable, Hashable, Identifiable {
 ///     }
 ///
 /// `ndi` names an NDI source exactly as it appears on the network (Setup lists them).
+/// `switcher` is atem (Blackmagic ATEM) or avmatrix (AVMATRIX PVS0403U, HVS0403U, HVS0402U);
+/// `atemHost` is that switcher's address either way.
 /// `proto` is canonXC (Canon HTTP), sonyUDP (VISCA over IP, UDP 52381) or rawTCP (VISCA over TCP 5678).
 struct CueConfig: Codable, Equatable {
+    /// Which kind of switcher atemHost is.
+    var switcher: SwitcherKind = .atem
     var atemHost = ""
     /// The M/E the volunteer runs, counted from 1 as on the switcher.
     var me = 1
@@ -166,10 +171,11 @@ struct CueConfig: Codable, Equatable {
 
     init() {}
 
-    private enum Keys: String, CodingKey { case atemHost, me, sources, cameras, keys, trackSpeed, ptzSpeed, trackTilt, trackZoom, mixNames, pictures, screens, routes, framing, trackTuning }
+    private enum Keys: String, CodingKey { case switcher, atemHost, me, sources, cameras, keys, trackSpeed, ptzSpeed, trackTilt, trackZoom, mixNames, pictures, screens, routes, framing, trackTuning }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
+        switcher = try c.decodeIfPresent(SwitcherKind.self, forKey: .switcher) ?? .atem
         atemHost = try c.decodeIfPresent(String.self, forKey: .atemHost) ?? ""
         me = try c.decodeIfPresent(Int.self, forKey: .me) ?? 1
         sources = try c.decodeIfPresent([VolunteerSource].self, forKey: .sources) ?? []
@@ -318,7 +324,7 @@ final class ConfigStore: ObservableObject {
         let me = max(0, config.me - 1)
         if b.me != me { b.me = me }
         guard !readOnly else { return }
-        if b.atem.host != config.atemHost { b.atem.connect(config.atemHost) }
+        if b.atem.host != config.atemHost || b.atem.kind != config.switcher { b.atem.connect(config.atemHost, kind: config.switcher) }
         if b.ptz.cameras != config.cameras { b.ptz.cameras = config.cameras }
     }
 
