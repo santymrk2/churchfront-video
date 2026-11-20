@@ -30,6 +30,39 @@ public enum SwitcherKind: String, Codable, CaseIterable {
     }
 }
 
+/// What a switcher can do beyond the basics every one has (program, preview, cut, auto
+/// and fade to black). Each driver declares its own; the app hides, and Claude's tools
+/// refuse, what isn't there.
+public struct SwitcherCapabilities: OptionSet, Hashable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+
+    public static let tbar = SwitcherCapabilities(rawValue: 1 << 0)
+    public static let transitionStyle = SwitcherCapabilities(rawValue: 1 << 1)
+    public static let mixRate = SwitcherCapabilities(rawValue: 1 << 2)
+    public static let nextTransition = SwitcherCapabilities(rawValue: 1 << 3)
+    public static let upstreamKeys = SwitcherCapabilities(rawValue: 1 << 4)
+    public static let downstreamKeys = SwitcherCapabilities(rawValue: 1 << 5)
+    public static let aux = SwitcherCapabilities(rawValue: 1 << 6)
+    public static let macros = SwitcherCapabilities(rawValue: 1 << 7)
+    public static let streaming = SwitcherCapabilities(rawValue: 1 << 8)
+    public static let recording = SwitcherCapabilities(rawValue: 1 << 9)
+
+    public static let all: SwitcherCapabilities = [.tbar, .transitionStyle, .mixRate, .nextTransition, .upstreamKeys,
+                                                   .downstreamKeys, .aux, .macros, .streaming, .recording]
+
+    /// In plain words, for messages: "a T-bar", "aux outputs".
+    public var name: String {
+        let names: [(SwitcherCapabilities, String)] = [
+            (.tbar, "a T-bar"), (.transitionStyle, "transition styles"), (.mixRate, "a mix rate"),
+            (.nextTransition, "next-transition selection"), (.upstreamKeys, "upstream keys"),
+            (.downstreamKeys, "downstream keys"), (.aux, "aux outputs"), (.macros, "macros"),
+            (.streaming, "streaming"), (.recording, "recording"),
+        ]
+        return names.filter { contains($0.0) }.map(\.1).joined(separator: ", ")
+    }
+}
+
 public enum ATEMLink: Equatable {
     case idle
     case connecting
@@ -61,6 +94,23 @@ public enum SwitcherCommand: Equatable {
     case stopMacro
     case streaming(Bool)
     case recording(Bool)
+
+    /// What the switcher needs to be able to do for this; empty for the basics.
+    public var requires: SwitcherCapabilities {
+        switch self {
+        case .program, .preview, .cut, .auto, .fadeToBlack: return []
+        case .position: return .tbar
+        case .style: return .transitionStyle
+        case .mixRate: return .mixRate
+        case .nextSelection: return .nextTransition
+        case .keyOnAir: return .upstreamKeys
+        case .dskOnAir, .dskTie, .dskAuto: return .downstreamKeys
+        case .aux: return .aux
+        case .runMacro, .stopMacro: return .macros
+        case .streaming: return .streaming
+        case .recording: return .recording
+        }
+    }
 
     /// A short tag for the Status log.
     public var code: String {
@@ -120,6 +170,9 @@ public enum SwitcherEvent {
 
 /// Speaks to one make of switcher. Each connection gets a new driver.
 public protocol SwitcherDriver: AnyObject {
+    /// What this switcher can do beyond the basics. Switcher only passes on commands it covers.
+    var capabilities: SwitcherCapabilities { get }
+    /// Set before start. Called on the driver's own queue.
     var onEvent: ((SwitcherEvent) -> Void)? { get set }
     func start()
     func stop()
@@ -134,6 +187,12 @@ public struct SwitcherLogEntry: Identifiable {
     public let request: SwitcherCommand
     /// False when it didn't go out: not connected, or the switcher has nothing like it.
     public let sent: Bool
+
+    public init(time: Date, request: SwitcherCommand, sent: Bool) {
+        self.time = time
+        self.request = request
+        self.sent = sent
+    }
 
     /// A short tag, such as PVW.
     public var command: String { request.code }
@@ -153,10 +212,26 @@ public final class Switcher: ObservableObject {
     @Published public private(set) var tbarAtTop: [Int: Bool] = [:]
     /// The last commands this app sent (or tried to send), newest last, for the Status window.
     @Published public private(set) var sentLog: [SwitcherLogEntry] = []
+    /// What the connected switcher can do beyond the basics.
+    @Published public private(set) var capabilities: SwitcherCapabilities = []
 
+    public typealias DriverFactory = (_ kind: SwitcherKind, _ host: String, _ port: UInt16?) -> SwitcherDriver
+
+    private let makeDriver: DriverFactory
     private var driver: SwitcherDriver?
+    private static let logLength = 60
 
-    public init() {}
+    public convenience init() {
+        self.init { kind, host, port in kind.driver(host: host, port: port) }
+    }
+
+    /// `makeDriver` makes the driver for each connection; tests pass their own.
+    public init(makeDriver: @escaping DriverFactory) {
+        self.makeDriver = makeDriver
+    }
+
+    /// Whether the connected switcher can do this.
+    public func supports(_ c: SwitcherCommand) -> Bool { capabilities.isSuperset(of: c.requires) }
 
     // MARK: Connection
 
@@ -169,9 +244,10 @@ public final class Switcher: ObservableObject {
         self.host = h
         self.kind = kind
         state = ATEMState()
+        capabilities = []
         link = h.isEmpty ? .idle : .connecting
         guard !h.isEmpty else { return }
-        let d = kind.driver(host: h, port: port)
+        let d = makeDriver(kind, h, port)
         d.onEvent = { [weak self, weak d] e in
             DispatchQueue.main.async {
                 guard let self, let d, self.driver === d else { return }
@@ -179,6 +255,7 @@ public final class Switcher: ObservableObject {
             }
         }
         driver = d
+        capabilities = d.capabilities
         d.start()
     }
 
@@ -186,6 +263,7 @@ public final class Switcher: ObservableObject {
         driver?.stop()
         driver = nil
         host = ""
+        capabilities = []
         link = .idle
     }
 
@@ -199,35 +277,39 @@ public final class Switcher: ObservableObject {
 
     // MARK: Commands
 
-    public func perform(_ c: SwitcherCommand) {
-        let ok = driver?.perform(c) ?? false
+    /// Sends a request. True if it went out; false if the switcher isn't connected or
+    /// can't do it (it never reaches a driver that can't), and either way it's logged.
+    @discardableResult
+    public func perform(_ c: SwitcherCommand) -> Bool {
+        let ok = supports(c) && (driver?.perform(c) ?? false)
         let entry = SwitcherLogEntry(time: Date(), request: c, sent: ok)
         let log = {
             self.sentLog.append(entry)
-            if self.sentLog.count > 60 { self.sentLog.removeFirst(self.sentLog.count - 60) }
+            if self.sentLog.count > Self.logLength { self.sentLog.removeFirst(self.sentLog.count - Self.logLength) }
         }
         if Thread.isMainThread { log() } else { DispatchQueue.main.async(execute: log) }
+        return ok
     }
 
-    public func setProgram(_ source: Int, me: Int = 0) { perform(.program(source, me: me)) }
-    public func setPreview(_ source: Int, me: Int = 0) { perform(.preview(source, me: me)) }
-    public func cut(me: Int = 0) { perform(.cut(me: me)) }
-    public func auto(me: Int = 0) { perform(.auto(me: me)) }
+    @discardableResult public func setProgram(_ source: Int, me: Int = 0) -> Bool { perform(.program(source, me: me)) }
+    @discardableResult public func setPreview(_ source: Int, me: Int = 0) -> Bool { perform(.preview(source, me: me)) }
+    @discardableResult public func cut(me: Int = 0) -> Bool { perform(.cut(me: me)) }
+    @discardableResult public func auto(me: Int = 0) -> Bool { perform(.auto(me: me)) }
     /// 0 to 1 from the start of the transition.
-    public func setPosition(_ v: Double, me: Int = 0) { perform(.position(min(1, max(0, v)), me: me)) }
-    public func setStyle(_ style: Int, me: Int = 0) { perform(.style(style, me: me)) }
-    public func setNextSelection(_ mask: Int, me: Int = 0) { perform(.nextSelection(max(1, mask), me: me)) }
-    public func setMixRate(_ frames: Int, me: Int = 0) { perform(.mixRate(frames: min(250, max(1, frames)), me: me)) }
-    public func setKeyOnAir(_ keyer: Int, _ on: Bool, me: Int = 0) { perform(.keyOnAir(keyer: keyer, on: on, me: me)) }
-    public func setDSKOnAir(_ dsk: Int, _ on: Bool) { perform(.dskOnAir(dsk, on: on)) }
-    public func setDSKTie(_ dsk: Int, _ on: Bool) { perform(.dskTie(dsk, on: on)) }
-    public func dskAuto(_ dsk: Int) { perform(.dskAuto(dsk)) }
-    public func fadeToBlack(me: Int = 0) { perform(.fadeToBlack(me: me)) }
-    public func setAux(_ aux: Int, _ source: Int) { perform(.aux(aux, source: source)) }
-    public func runMacro(_ index: Int) { perform(.runMacro(index)) }
-    public func stopMacro() { perform(.stopMacro) }
-    public func setStreaming(_ on: Bool) { perform(.streaming(on)) }
-    public func setRecording(_ on: Bool) { perform(.recording(on)) }
+    @discardableResult public func setPosition(_ v: Double, me: Int = 0) -> Bool { perform(.position(min(1, max(0, v)), me: me)) }
+    @discardableResult public func setStyle(_ style: Int, me: Int = 0) -> Bool { perform(.style(style, me: me)) }
+    @discardableResult public func setNextSelection(_ mask: Int, me: Int = 0) -> Bool { perform(.nextSelection(max(1, mask), me: me)) }
+    @discardableResult public func setMixRate(_ frames: Int, me: Int = 0) -> Bool { perform(.mixRate(frames: min(250, max(1, frames)), me: me)) }
+    @discardableResult public func setKeyOnAir(_ keyer: Int, _ on: Bool, me: Int = 0) -> Bool { perform(.keyOnAir(keyer: keyer, on: on, me: me)) }
+    @discardableResult public func setDSKOnAir(_ dsk: Int, _ on: Bool) -> Bool { perform(.dskOnAir(dsk, on: on)) }
+    @discardableResult public func setDSKTie(_ dsk: Int, _ on: Bool) -> Bool { perform(.dskTie(dsk, on: on)) }
+    @discardableResult public func dskAuto(_ dsk: Int) -> Bool { perform(.dskAuto(dsk)) }
+    @discardableResult public func fadeToBlack(me: Int = 0) -> Bool { perform(.fadeToBlack(me: me)) }
+    @discardableResult public func setAux(_ aux: Int, _ source: Int) -> Bool { perform(.aux(aux, source: source)) }
+    @discardableResult public func runMacro(_ index: Int) -> Bool { perform(.runMacro(index)) }
+    @discardableResult public func stopMacro() -> Bool { perform(.stopMacro) }
+    @discardableResult public func setStreaming(_ on: Bool) -> Bool { perform(.streaming(on)) }
+    @discardableResult public func setRecording(_ on: Bool) -> Bool { perform(.recording(on)) }
 }
 
 /// The name the suite's apps (Churchfront Video, Screens, Cues) already use.

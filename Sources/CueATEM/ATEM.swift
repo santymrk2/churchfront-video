@@ -80,6 +80,9 @@ public struct ATEMState: Equatable {
 
 /// The ATEM's network protocol. Reports through onEvent on its own queue (see SwitcherDriver).
 final class ATEMDriver: SwitcherDriver {
+    /// Every ATEM has these; a model without one of them (no aux, no recorder) reports
+    /// none in its state, and the app hides it from that.
+    let capabilities = SwitcherCapabilities.all
     var onEvent: ((SwitcherEvent) -> Void)?
 
     private let queue = DispatchQueue(label: "cuevideo.atem")

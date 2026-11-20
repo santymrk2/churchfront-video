@@ -31,10 +31,12 @@ struct KeyButton: Codable, Hashable, Identifiable {
         return s.keyOnAir[(me ?? 1) - 1]?[keyer - 1] ?? false
     }
 
-    func toggle(_ atem: ATEMClient) {
-        if let dsk { atem.dskAuto(dsk - 1); return }
-        guard let keyer else { return }
-        atem.setKeyOnAir(keyer - 1, !isOn(atem.state), me: (me ?? 1) - 1)
+    /// True if the command went out.
+    @discardableResult
+    func toggle(_ atem: ATEMClient) -> Bool {
+        if let dsk { return atem.dskAuto(dsk - 1) }
+        guard let keyer else { return false }
+        return atem.setKeyOnAir(keyer - 1, !isOn(atem.state), me: (me ?? 1) - 1)
     }
 
     /// Whether the key will be on air after the next Cut or Fade: on now, unless the next
@@ -113,7 +115,9 @@ struct RouteButton: Codable, Hashable, Identifiable {
     var id: String { label }
 
     func isActive(_ s: ATEMState) -> Bool { !set.isEmpty && set.allSatisfy { s.aux[$0.aux - 1] == $0.source } }
-    func run(_ atem: ATEMClient) { for c in set { atem.setAux(c.aux - 1, c.source) } }
+    /// True if every change went out.
+    @discardableResult
+    func run(_ atem: ATEMClient) -> Bool { set.map { atem.setAux($0.aux - 1, $0.source) }.allSatisfy { $0 } }
 }
 
 /// How CueVideo is set up, kept as plain JSON so a person or Claude can read and edit it:

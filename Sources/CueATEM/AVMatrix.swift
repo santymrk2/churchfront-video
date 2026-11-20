@@ -153,9 +153,11 @@ public struct AVMatrixStatus: Equatable {
 
 /// The connection to one AVMATRIX switcher. Reports through onEvent on its own queue.
 final class AVMatrixDriver: SwitcherDriver {
-    public var onEvent: ((SwitcherEvent) -> Void)?
+    /// Program, preview, cut, auto and fade to black only.
+    let capabilities: SwitcherCapabilities = []
+    var onEvent: ((SwitcherEvent) -> Void)?
 
-    public let host: String
+    let host: String
     private let devicePort: UInt16
     private let localPort: UInt16
     private let queue = DispatchQueue(label: "cuevideo.avmatrix")
@@ -169,15 +171,15 @@ final class AVMatrixDriver: SwitcherDriver {
     private var link: ATEMLink = .idle
     private var stopped = false
 
-    public init(host: String, devicePort: UInt16 = AVMatrixProtocol.devicePort, localPort: UInt16 = AVMatrixProtocol.localPort) {
+    init(host: String, devicePort: UInt16 = AVMatrixProtocol.devicePort, localPort: UInt16 = AVMatrixProtocol.localPort) {
         self.host = host
         self.devicePort = devicePort
         self.localPort = localPort
     }
 
-    public func start() { queue.async { self.open() } }
+    func start() { queue.async { self.open() } }
 
-    public func stop() {
+    func stop() {
         queue.async {
             self.stopped = true
             self.timer?.cancel(); self.timer = nil
@@ -189,7 +191,7 @@ final class AVMatrixDriver: SwitcherDriver {
     /// Sends a request. False if this switcher has nothing like it, or isn't answering.
     /// Program, preview, cut and auto also show at once, before the switcher reports them,
     /// so Live and Next (and the camera safeguards) never lag a press.
-    public func perform(_ c: SwitcherCommand) -> Bool {
+    func perform(_ c: SwitcherCommand) -> Bool {
         queue.sync {
             guard fd >= 0, heard, let f = AVMatrixProtocol.frame(for: c, ftb: status.ftb) else { return false }
             send(f)

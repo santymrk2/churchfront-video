@@ -49,6 +49,10 @@ enum SelfTest {
     /// Only when nothing is live.
     static func realTest() {
         let atem = Booth.shared.atem
+        guard atem.kind == .atem else {
+            print("This self-test runs ATEM commands. For an AVMATRIX: swift test, and Tools/fake_avmatrix.py with the app.")
+            exit(2)
+        }
         let only = ProcessInfo.processInfo.environment["CUEVIDEO_REALTEST"] == "trace"
         func log(_ s: String) { print("REAL", s); fflush(stdout) }
         var passed = 0, failed = 0
@@ -214,6 +218,10 @@ enum SelfTest {
     static func run() {
         let booth = Booth.shared
         let atem = booth.atem
+        guard atem.kind == .atem else {
+            print("This self-test runs ATEM commands. For an AVMATRIX: swift test, and Tools/fake_avmatrix.py with the app.")
+            exit(2)
+        }
         let ptz = booth.ptz
         let out = ProcessInfo.processInfo.environment["CUEVIDEO_SNAPSHOT"]
         func log(_ s: String) { print("SELFTEST", s); fflush(stdout) }

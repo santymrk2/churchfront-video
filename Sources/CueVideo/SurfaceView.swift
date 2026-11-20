@@ -21,7 +21,8 @@ struct SurfaceView: View {
                 Card(title: "Transition") { transition }.fixedSize()
             }
             HStack(alignment: .top, spacing: T.s4) {
-                if st.keyerCount > 0 || st.dskCount > 0 {
+                if (st.keyerCount > 0 && atem.capabilities.contains(.upstreamKeys))
+                    || (st.dskCount > 0 && atem.capabilities.contains(.downstreamKeys)) {
                     Card(title: "Keys") { keys }.fixedSize()
                 }
                 if !st.macros.isEmpty {
@@ -132,19 +133,26 @@ struct SurfaceView: View {
     var transition: some View {
         let inT = st.inTransition[me] ?? false
         let black = st.ftbBlack[me] ?? false
+        let can = atem.capabilities
         return HStack(alignment: .top, spacing: T.s4) {
-            VStack(spacing: T.s2) {
-                ForEach([(0, "MIX"), (1, "DIP"), (2, "WIPE"), (3, "DVE")], id: \.0) { id, name in
-                    PanelButton(title: name, lit: (st.style[me] ?? 0) == id ? T.warning : nil, width: 62, height: 32, titleSize: 11) {
-                        atem.setStyle(id, me: me)
+            if can.contains(.transitionStyle) || can.contains(.mixRate) {
+                VStack(spacing: T.s2) {
+                    if can.contains(.transitionStyle) {
+                        ForEach([(0, "MIX"), (1, "DIP"), (2, "WIPE"), (3, "DVE")], id: \.0) { id, name in
+                            PanelButton(title: name, lit: (st.style[me] ?? 0) == id ? T.warning : nil, width: 62, height: 32, titleSize: 11) {
+                                atem.setStyle(id, me: me)
+                            }
+                        }
+                    }
+                    if can.contains(.mixRate) {
+                        HStack(spacing: 2) {
+                            IconButton(icon: "minus", help: "Shorter mix") { atem.setMixRate((st.mixRate[me] ?? 30) - 5, me: me) }
+                            Text(rate(st.mixRate[me] ?? 30)).font(.sans(12, .semibold)).frame(width: 34)
+                            IconButton(icon: "plus", help: "Longer mix") { atem.setMixRate((st.mixRate[me] ?? 30) + 5, me: me) }
+                        }
+                        .help("Mix length in seconds and frames")
                     }
                 }
-                HStack(spacing: 2) {
-                    IconButton(icon: "minus", help: "Shorter mix") { atem.setMixRate((st.mixRate[me] ?? 30) - 5, me: me) }
-                    Text(rate(st.mixRate[me] ?? 30)).font(.sans(12, .semibold)).frame(width: 34)
-                    IconButton(icon: "plus", help: "Longer mix") { atem.setMixRate((st.mixRate[me] ?? 30) + 5, me: me) }
-                }
-                .help("Mix length in seconds and frames")
             }
             VStack(spacing: T.s2) {
                 PanelButton(title: "CUT", width: 84, height: 52, titleSize: 15) { atem.cut(me: me) }
@@ -153,7 +161,9 @@ struct SurfaceView: View {
                             width: 84, height: 36, titleSize: 12, blink: black) { atem.fadeToBlack(me: me) }
                     .help("Fade to black")
             }
-            TBar(me: me).frame(width: 56, height: 170)
+            if can.contains(.tbar) {
+                TBar(me: me).frame(width: 56, height: 170)
+            }
         }
     }
 

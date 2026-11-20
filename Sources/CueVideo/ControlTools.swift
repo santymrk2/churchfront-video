@@ -148,8 +148,24 @@ enum ControlTools {
 
     private static func ok(_ what: String, _ extra: [String: Any] = [:]) -> [String: Any] { extra.merging(["ok": true, "done": what]) { a, _ in a } }
 
+    /// The switcher abilities a tool needs beyond the basics.
+    private static let needs: [String: SwitcherCapabilities] = [
+        "set_transition_style": .transitionStyle, "set_mix_rate": .mixRate, "set_tbar": .tbar,
+        "set_next_transition": .nextTransition, "set_upstream_key": .upstreamKeys, "dsk": .downstreamKeys,
+        "set_aux": .aux, "route_screen": .aux, "run_route_button": .aux,
+        "run_macro": .macros, "stop_macro": .macros, "set_recording": .recording, "set_streaming": .streaming,
+    ]
+
+    /// Throws unless a command went out.
+    private static func sent(_ went: Bool) throws {
+        guard went else { throw fail("Nothing went out: the switcher isn't connected, or can't do that (see get_status).") }
+    }
+
     private static func run(_ name: String, _ a: [String: Any], _ done: @escaping Done) throws {
         let s = atem.state
+        if let need = needs[name], !atem.capabilities.contains(need) {
+            throw fail("This switcher (\(atem.kind.title)) doesn't have \(need.name). Nothing was changed.")
+        }
         switch name {
         case "get_status": done(status())
         case "get_config": done(["config": try configObject(), "file": store.url.path])
@@ -170,33 +186,33 @@ enum ControlTools {
 
         case "set_next":
             let m = try me(a), i = try source(a["source"])
-            atem.setPreview(i, me: m); done(ok("\(store.label(i, s)) is on Next, M/E \(m + 1)"))
+            try sent(atem.setPreview(i, me: m)); done(ok("\(store.label(i, s)) is on Next, M/E \(m + 1)"))
         case "set_live", "switcher_set_program":
             let m = try me(a), i = try source(a["source"])
-            atem.setProgram(i, me: m); done(ok("\(store.label(i, s)) is on Live, M/E \(m + 1)"))
+            try sent(atem.setProgram(i, me: m)); done(ok("\(store.label(i, s)) is on Live, M/E \(m + 1)"))
         case "switcher_set_preview":
             let m = try me(a), i = try source(a["source"])
-            atem.setPreview(i, me: m); done(ok("\(store.label(i, s)) is on preview, M/E \(m + 1)"))
-        case "cut": let m = try me(a); atem.cut(me: m); done(ok("Cut on M/E \(m + 1)"))
-        case "fade": let m = try me(a); atem.auto(me: m); done(ok("Fading on M/E \(m + 1)"))
-        case "fade_to_black": let m = try me(a); atem.fadeToBlack(me: m); done(ok("Fade to black on M/E \(m + 1)"))
+            try sent(atem.setPreview(i, me: m)); done(ok("\(store.label(i, s)) is on preview, M/E \(m + 1)"))
+        case "cut": let m = try me(a); try sent(atem.cut(me: m)); done(ok("Cut on M/E \(m + 1)"))
+        case "fade": let m = try me(a); try sent(atem.auto(me: m)); done(ok("Fading on M/E \(m + 1)"))
+        case "fade_to_black": let m = try me(a); try sent(atem.fadeToBlack(me: m)); done(ok("Fade to black on M/E \(m + 1)"))
         case "set_key_button":
             let label = (a["button"] as? String ?? "").lowercased()
             guard let k = store.config.keys.first(where: { $0.label.lowercased() == label }) else {
                 throw fail("No key button called that. Buttons: \(store.config.keys.map(\.label).joined(separator: ", ")).")
             }
             let want = a["on"] as? Bool ?? !k.isOn(s)
-            if want != k.isOn(s) { k.toggle(atem) }
+            if want != k.isOn(s) { try sent(k.toggle(atem)) }
             done(ok("\(k.label) \(want ? "on" : "off") air"))
         case "set_recording":
             guard s.hasRecording else { throw fail("This switcher doesn't record.") }
             // Never guess: a call without a clear true or false must not stop the recording.
             guard let on = a["on"] as? Bool else { throw fail("Give on as true (record) or false (stop). Nothing was changed.") }
-            atem.setRecording(on); done(ok("Recording \(on ? "started" : "stopped")"))
+            try sent(atem.setRecording(on)); done(ok("Recording \(on ? "started" : "stopped")"))
         case "set_streaming":
             guard s.hasStreaming else { throw fail("This switcher doesn't stream.") }
             guard let on = a["on"] as? Bool else { throw fail("Give on as true (stream) or false (stop). Nothing was changed.") }
-            atem.setStreaming(on); done(ok("Streaming \(on ? "started" : "stopped")"))
+            try sent(atem.setStreaming(on)); done(ok("Streaming \(on ? "started" : "stopped")"))
 
         case "camera_move":
             let c = try cam(a, changing: true)
@@ -244,7 +260,7 @@ enum ControlTools {
             }
             if hidden, a["allow_hidden"] as? Bool != true { throw fail("\(what) is hidden from volunteers (it may feed an encoder or the stream). Send allow_hidden: true to change it.") }
             let src = try routeSource(a["source"])
-            for x in auxes { atem.setAux(x - 1, src) }
+            for x in auxes { try sent(atem.setAux(x - 1, src)) }
             done(ok("\(what) now shows \(store.routeLabel(src, s))"))
         case "run_route_button":
             let q = (a["button"] as? String ?? "").lowercased()
@@ -252,7 +268,7 @@ enum ControlTools {
                     ?? onlyOne(store.config.routes.filter { $0.label.lowercased().contains(q) }, q, "routing button", \.label) else {
                 throw fail("No routing button called \(a["button"] ?? ""). Buttons: \(store.config.routes.map(\.label).joined(separator: ", ")).")
             }
-            r.run(atem); done(ok("Ran \(r.label): \(RoutingText.detail(r, store, s).replacingOccurrences(of: "\n", with: "; "))"))
+            try sent(r.run(atem)); done(ok("Ran \(r.label): \(RoutingText.detail(r, store, s).replacingOccurrences(of: "\n", with: "; "))"))
         case "find_devices":
             DeviceFinder.find { list, nets in
                 done(["networks": nets, "devices": list.map { ["kind": $0.kind, "name": $0.name, "host": $0.host] },
@@ -443,49 +459,49 @@ enum ControlTools {
         case "set_transition_style":
             let styles = ["mix": 0, "dip": 1, "wipe": 2, "dve": 3]
             guard let st = styles[a["style"] as? String ?? ""] else { throw fail("style is mix, dip, wipe or dve.") }
-            let m = try me(a); atem.setStyle(st, me: m); done(ok("Style \(a["style"]!) on M/E \(m + 1)"))
+            let m = try me(a); try sent(atem.setStyle(st, me: m)); done(ok("Style \(a["style"]!) on M/E \(m + 1)"))
         case "set_mix_rate":
             let m = try me(a), f = Int(dbl(a["frames"]))
             guard (1...250).contains(f) else { throw fail("frames is 1 to 250.") }
-            atem.setMixRate(f, me: m); done(ok("Mix rate \(f) frames on M/E \(m + 1)"))
+            try sent(atem.setMixRate(f, me: m)); done(ok("Mix rate \(f) frames on M/E \(m + 1)"))
         case "set_tbar":
             let m = try me(a), p = dbl(a["position"])
-            atem.setPosition(min(1, max(0, p)), me: m); done(ok("T-bar at \(Int(p * 100))% on M/E \(m + 1)"))
+            try sent(atem.setPosition(min(1, max(0, p)), me: m)); done(ok("T-bar at \(Int(p * 100))% on M/E \(m + 1)"))
         case "set_next_transition":
             let m = try me(a)
             var mask = (a["background"] as? Bool ?? true) ? 1 : 0
             for k in (a["keys"] as? [Any] ?? []) { let n = Int(dbl(k)); if n >= 1 { mask |= 2 << (n - 1) } }
             guard mask != 0 else { throw fail("Include the background or at least one key.") }
-            atem.setNextSelection(mask, me: m); done(ok("Next transition set on M/E \(m + 1)"))
+            try sent(atem.setNextSelection(mask, me: m)); done(ok("Next transition set on M/E \(m + 1)"))
         case "set_upstream_key":
             let m = try me(a), k = Int(dbl(a["keyer"]))
             guard k >= 1, k <= max(1, s.keyerCount) else { throw fail("keyer is 1 to \(s.keyerCount).") }
             let on = a["on"] as? Bool ?? false
-            atem.setKeyOnAir(k - 1, on, me: m); done(ok("M/E \(m + 1) key \(k) \(on ? "on" : "off") air"))
+            try sent(atem.setKeyOnAir(k - 1, on, me: m)); done(ok("M/E \(m + 1) key \(k) \(on ? "on" : "off") air"))
         case "dsk":
             let d = Int(dbl(a["dsk"]))
             guard d >= 1, d <= max(1, s.dskCount) else { throw fail("dsk is 1 to \(s.dskCount).") }
             switch a["action"] as? String {
-            case "on": atem.setDSKOnAir(d - 1, true)
-            case "off": atem.setDSKOnAir(d - 1, false)
-            case "auto": atem.dskAuto(d - 1)
-            case "tie_on": atem.setDSKTie(d - 1, true)
-            case "tie_off": atem.setDSKTie(d - 1, false)
+            case "on": try sent(atem.setDSKOnAir(d - 1, true))
+            case "off": try sent(atem.setDSKOnAir(d - 1, false))
+            case "auto": try sent(atem.dskAuto(d - 1))
+            case "tie_on": try sent(atem.setDSKTie(d - 1, true))
+            case "tie_off": try sent(atem.setDSKTie(d - 1, false))
             default: throw fail("action is on, off, auto, tie_on or tie_off.")
             }
             done(ok("DSK \(d): \(a["action"] as? String ?? "")"))
         case "set_aux":
             let x = Int(dbl(a["aux"])), i = try source(a["source"], aux: true)
             guard x >= 1, x <= max(1, s.auxCount) else { throw fail("aux is 1 to \(s.auxCount).") }
-            atem.setAux(x - 1, i); done(ok("Aux \(x): \(s.inputs[i]?.long ?? "\(i)")"))
+            try sent(atem.setAux(x - 1, i)); done(ok("Aux \(x): \(s.inputs[i]?.long ?? "\(i)")"))
         case "run_macro":
             let i: Int
             if let n = intValue(a["macro"]) { i = n - 1 }
             else if let name = a["macro"] as? String, let hit = s.macros.first(where: { $0.value.lowercased() == name.lowercased() }) { i = hit.key }
             else { throw fail("No macro by that number or name. Macros: \(s.macros.sorted { $0.key < $1.key }.map { "\($0.key + 1) \($0.value)" }.joined(separator: ", "))") }
             guard s.macros[i] != nil else { throw fail("There's no macro \(i + 1).") }
-            atem.runMacro(i); done(ok("Running macro \(i + 1) \(s.macros[i] ?? "")"))
-        case "stop_macro": atem.stopMacro(); done(ok("Stopped the macro"))
+            try sent(atem.runMacro(i)); done(ok("Running macro \(i + 1) \(s.macros[i] ?? "")"))
+        case "stop_macro": try sent(atem.stopMacro()); done(ok("Stopped the macro"))
         default: throw fail("No tool called \(name).")
         }
     }
@@ -713,7 +729,8 @@ enum ControlTools {
         }
         return [
             "switcher": [
-                "connection": link, "host": atem.host, "model": s.product, "protocol": s.version,
+                "connection": link, "host": atem.host, "kind": atem.kind.rawValue, "model": s.product, "protocol": s.version,
+                "can_also": atem.capabilities.isEmpty ? "only program, preview, cut, fade and fade to black" : atem.capabilities.name,
                 "volunteer_me": booth.me + 1, "mes": mes, "dsks": dsks,
                 "aux": s.aux.keys.sorted().map { ["aux": $0 + 1, "source": src(s.aux[$0])] },
                 "macros": s.macros.keys.sorted().map { ["macro": $0 + 1, "name": s.macros[$0] ?? ""] },
