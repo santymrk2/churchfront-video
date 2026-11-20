@@ -118,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Self-tests name their own switcher; otherwise the config file says where it is.
         if let host = env["CUEVIDEO_HOST"], !host.isEmpty {
             let kind = env["CUEVIDEO_SWITCHER"].flatMap(SwitcherKind.init(rawValue:)) ?? .atem
-            booth.atem.connect(host, port: env["CUEVIDEO_PORT"].flatMap(UInt16.init) ?? 9910, kind: kind)
+            booth.atem.connect(host, port: env["CUEVIDEO_PORT"].flatMap(UInt16.init), kind: kind)
         }
         if let fake = env["CUEVIDEO_FAKECAMS"] {
             var cams: [PTZCamera] = []

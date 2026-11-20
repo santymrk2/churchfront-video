@@ -25,8 +25,10 @@ import Glibc
 //   bit 0 in the next transition), 24 and 25 PIP 1 and 2 (source, size, x, y),
 //   FE 01 asks for the whole state, FF 01 a keep-alive.
 //
-// The switcher's state is turned into an ATEMState with one M/E, so everything built on
-// ATEMClient (Next and Live, tally, the camera safeguards, auto tracking) works unchanged.
+// AVMatrixDriver reports the switcher's state as an ATEMState with one M/E (see
+// Switcher.swift), so Next and Live, tally, the camera safeguards and auto tracking work
+// as they do on an ATEM. What it doesn't have (T-bar, keys, DSKs, aux, macros, recording
+// and streaming) stays empty, and the app hides it.
 
 public enum AVMatrixProtocol {
     public static let devicePort: UInt16 = 19523
@@ -76,17 +78,15 @@ public enum AVMatrixProtocol {
         return nil
     }
 
-    /// The switcher's commands for an ATEM command (as ATEMClient builds them), or nil
-    /// when this switcher has nothing like it. `ftb` is whether it's faded to black now.
-    public static func translate(_ name: String, _ d: [UInt8], ftb: Bool) -> [UInt8]? {
-        func u16(_ i: Int) -> Int { i + 1 < d.count ? Int(d[i]) << 8 | Int(d[i + 1]) : -1 }
-        let me = Int(d.first ?? 0)
-        switch name {
-        case "CPgI" where me == 0: return source(forInput: u16(2)).map { frame(0x12, [$0]) }
-        case "CPvI" where me == 0: return source(forInput: u16(2)).map { frame(0x13, [$0]) }
-        case "DCut" where me == 0: return frame(0x11, [0x02, 0x00])
-        case "DAut" where me == 0: return frame(0x11, [0x01, 0x00])
-        case "FtbA" where me == 0: return frame(0x11, [0x03, ftb ? 0x00 : 0x01])
+    /// The frame for a request, or nil when this switcher has nothing like it. `ftb` is
+    /// whether it's faded to black now (the switcher sets black on or off; it has no toggle).
+    public static func frame(for c: SwitcherCommand, ftb: Bool) -> [UInt8]? {
+        switch c {
+        case .program(let input, me: 0): return source(forInput: input).map { frame(0x12, [$0]) }
+        case .preview(let input, me: 0): return source(forInput: input).map { frame(0x13, [$0]) }
+        case .cut(me: 0): return frame(0x11, [0x02, 0x00])
+        case .auto(me: 0): return frame(0x11, [0x01, 0x00])
+        case .fadeToBlack(me: 0): return frame(0x11, [0x03, ftb ? 0x00 : 0x01])
         default: return nil
         }
     }
@@ -151,10 +151,9 @@ public struct AVMatrixStatus: Equatable {
     }
 }
 
-/// The connection to one AVMATRIX switcher. Calls back on its own queue.
-public final class AVMatrixLink {
-    public var onState: ((ATEMState) -> Void)?
-    public var onLink: ((ATEMLink) -> Void)?
+/// The connection to one AVMATRIX switcher. Reports through onEvent on its own queue.
+final class AVMatrixDriver: SwitcherDriver {
+    public var onEvent: ((SwitcherEvent) -> Void)?
 
     public let host: String
     private let devicePort: UInt16
@@ -187,40 +186,37 @@ public final class AVMatrixLink {
         }
     }
 
-    /// Sends the switcher's version of an ATEM command. False if this switcher has nothing
-    /// like it. Program, preview, cut and auto also show at once, before the switcher
-    /// reports them, so Live and Next (and the camera safeguards) never lag a press.
-    public func perform(_ name: String, _ data: [UInt8]) -> Bool {
-        guard let f = queue.sync(execute: { AVMatrixProtocol.translate(name, data, ftb: status.ftb) }) else { return false }
-        queue.async {
-            guard self.fd >= 0, self.heard else { return }
-            self.send(f)
-            var s = self.status
-            switch name {
-            case "CPgI": s.program = AVMatrixProtocol.source(forInput: Self.u16(data, 2)).map(Int.init)
-            case "CPvI": s.preview = AVMatrixProtocol.source(forInput: Self.u16(data, 2)).map(Int.init)
-            case "DCut", "DAut": (s.program, s.preview) = (s.preview, s.program)
+    /// Sends a request. False if this switcher has nothing like it, or isn't answering.
+    /// Program, preview, cut and auto also show at once, before the switcher reports them,
+    /// so Live and Next (and the camera safeguards) never lag a press.
+    public func perform(_ c: SwitcherCommand) -> Bool {
+        queue.sync {
+            guard fd >= 0, heard, let f = AVMatrixProtocol.frame(for: c, ftb: status.ftb) else { return false }
+            send(f)
+            var s = status
+            switch c {
+            case .program(let input, _): s.program = AVMatrixProtocol.source(forInput: input).map(Int.init)
+            case .preview(let input, _): s.preview = AVMatrixProtocol.source(forInput: input).map(Int.init)
+            case .cut, .auto: (s.program, s.preview) = (s.preview, s.program)
             default: break
             }
-            self.update(s)
-            self.send(AVMatrixProtocol.frame(0xFE, [0x01]))
+            update(s)
+            send(AVMatrixProtocol.frame(0xFE, [0x01]))
+            return true
         }
-        return queue.sync { fd >= 0 && heard }
     }
-
-    private static func u16(_ d: [UInt8], _ i: Int) -> Int { i + 1 < d.count ? Int(d[i]) << 8 | Int(d[i + 1]) : -1 }
 
     private func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
     private func setLink(_ l: ATEMLink) {
         guard l != link, !stopped else { return }
         link = l
-        onLink?(l)
+        onEvent?(.link(l))
     }
 
     private func update(_ s: AVMatrixStatus) {
         status = s
-        if heard, !stopped { onState?(s.atemState()) }
+        if heard, !stopped { onEvent?(.state(s.atemState())) }
     }
 
     private func open() {

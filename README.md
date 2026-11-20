@@ -4,9 +4,10 @@ A simple switcher control surface for church booths (Blackmagic ATEM or AVMATRIX
 camera previews. Part of the Churchfront App Suite (Churchfront Cues, Churchfront Screens,
 Churchfront Lights, Churchfront Tracks). Native macOS 14+, SwiftUI.
 
-- `Sources/CueATEM`: the shared engine. `ATEM.swift` speaks the ATEM network
-  protocol (UDP 9910) with two-way state; `AVMatrix.swift` does the same for AVMATRIX
-  switchers (UDP 19523) behind the same `ATEMClient`; `PTZ.swift` drives Canon cameras over
+- `Sources/CueATEM`: the shared engine. `Switcher.swift` is the switcher the app talks
+  to (`ATEMClient` is another name for it), with a driver per make: `ATEM.swift` speaks
+  the ATEM network protocol (UDP 9910) with two-way state, and `AVMatrix.swift` the
+  AVMATRIX one (UDP 19523). Both report in `ATEMState`. `PTZ.swift` drives Canon cameras over
   Canon's HTTP control and VISCA cameras (VISCA over IP UDP 52381, or VISCA over
   TCP 5678); `CameraLogin.swift` keeps the cameras' admin login in the Keychain.
   Meant to be used by Churchfront Screens (slide actions) and Churchfront Cues too.
@@ -37,8 +38,9 @@ permissions and scripts keep working.
 Churchfront Video can run an AVMATRIX PVS0403U, HVS0403U or HVS0402U instead of an ATEM:
 Setup > Switcher > Kind > **AVMATRIX**, then the switcher's IP address (or `"switcher": "avmatrix"`
 and `atemHost` in the config file). `Sources/CueATEM/AVMatrix.swift` speaks AVMATRIX's own UDP
-protocol (commands to port 19523, the switcher's reports back to port 19522), and turns the
-switcher's state into the same one an ATEM gives, so everything else works the same way.
+protocol (commands to port 19523, the switcher's reports back to port 19522) as a
+`SwitcherDriver`, and reports the switcher's state as an ATEM's, so everything else works
+the same way. Another make of switcher is another driver.
 
 - **What works:** inputs 1 to 4 and the pattern (as color bars) on Next and Live, Cut, Fade,
   Fade to Black, tally, and with them the camera safeguards and auto tracking on the camera on

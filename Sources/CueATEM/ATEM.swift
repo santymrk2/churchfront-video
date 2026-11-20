@@ -1,10 +1,11 @@
 import Foundation
 import Network
-import Combine
 
 // Blackmagic ATEM control over the network (UDP 9910), with no Blackmagic
 // software installed. The switcher sends its whole state when we connect and
 // every change after, so the state here always matches the panel.
+//
+// ATEMState is also the model every other switcher's driver reports in (see Switcher.swift).
 
 public struct ATEMInput: Identifiable, Hashable {
     public let id: Int
@@ -77,70 +78,9 @@ public struct ATEMState: Equatable {
     public func name(_ id: Int?) -> String { id.map { inputs[$0]?.short ?? "\($0)" } ?? "?" }
 }
 
-/// The kind of switcher ATEMClient talks to. Everything else in the app reads the same
-/// ATEMState whichever it is.
-public enum SwitcherKind: String, Codable, CaseIterable {
-    /// Blackmagic ATEM, over UDP 9910.
-    case atem
-    /// AVMATRIX PVS0403U, HVS0403U and HVS0402U, over UDP 19523 (see AVMatrix.swift).
-    case avmatrix
-
-    public var title: String { self == .atem ? "ATEM" : "AVMATRIX" }
-}
-
-public enum ATEMLink: Equatable {
-    case idle
-    case connecting
-    case online
-    case offline(String)
-}
-
-public struct ATEMLogEntry: Identifiable {
-    public let id = UUID()
-    public let time: Date
-    /// The four-letter ATEM command, such as CPvI (set preview).
-    public let command: String
-    public let data: [UInt8]
-    /// False when the switcher wasn't connected, so nothing went out.
-    public let sent: Bool
-
-    /// A plain description, such as "Preview, M/E 1: input 9".
-    public func describe(_ state: ATEMState) -> String {
-        func u16(_ i: Int) -> Int { i + 1 < data.count ? Int(data[i]) << 8 | Int(data[i + 1]) : 0 }
-        let me = "M/E \(Int(data.first ?? 0) + 1)"
-        switch command {
-        case "CPgI": return "Program, \(me): \(state.inputs[u16(2)]?.long ?? "input \(u16(2))")"
-        case "CPvI": return "Preview, \(me): \(state.inputs[u16(2)]?.long ?? "input \(u16(2))")"
-        case "DCut": return "Cut, \(me)"
-        case "DAut": return "Auto transition, \(me)"
-        case "CTPs": return "T-bar, \(me): \(u16(2) / 100)%"
-        case "CTTp": return "Transition settings, M/E \(Int(data.count > 1 ? data[1] : 0) + 1)"
-        case "CTMx": return "Mix rate, \(me): \(data.count > 1 ? Int(data[1]) : 0) frames"
-        case "CKOn": return "Key \(Int(data.count > 1 ? data[1] : 0) + 1) \(data.count > 2 && data[2] != 0 ? "on" : "off"), \(me)"
-        case "CDsL": return "DSK \(Int(data.first ?? 0) + 1) \(data.count > 1 && data[1] != 0 ? "on" : "off")"
-        case "CDsT": return "DSK \(Int(data.first ?? 0) + 1) tie \(data.count > 1 && data[1] != 0 ? "on" : "off")"
-        case "DDsA": return "DSK \(Int(data.first ?? 0) + 1) auto"
-        case "FtbA": return "Fade to black, \(me)"
-        case "CAuS": return "Aux \(Int(data.count > 1 ? data[1] : 0) + 1): \(state.inputs[u16(2)]?.long ?? "input \(u16(2))")"
-        case "MAct": return u16(0) == 0xFFFF ? "Stop macro" : "Run macro \(u16(0) + 1)"
-        case "StrR": return "Streaming \(data.first == 1 ? "start" : "stop")"
-        case "RcTM": return "Recording \(data.first == 1 ? "start" : "stop")"
-        default: return command
-        }
-    }
-}
-
-public final class ATEMClient: ObservableObject {
-    @Published public private(set) var state = ATEMState()
-    @Published public private(set) var link: ATEMLink = .idle
-    @Published public private(set) var host = ""
-    @Published public private(set) var kind: SwitcherKind = .atem
-    /// Which end of the T-bar is at rest, per M/E. Flips when a transition
-    /// finishes, as on a hardware panel.
-    @Published public private(set) var tbarAtTop: [Int: Bool] = [:]
-    /// The last commands this app sent (or tried to send while offline), newest last,
-    /// for the Status window.
-    @Published public private(set) var sentLog: [ATEMLogEntry] = []
+/// The ATEM's network protocol. Reports through onEvent on its own queue (see SwitcherDriver).
+final class ATEMDriver: SwitcherDriver {
+    var onEvent: ((SwitcherEvent) -> Void)?
 
     private let queue = DispatchQueue(label: "cuevideo.atem")
     private var conn: NWConnection?
@@ -157,8 +97,7 @@ public final class ATEMClient: ObservableObject {
     private var timer: DispatchSourceTimer?
     private var s = ATEMState()
     private var lastPosition: [Int: Double] = [:]
-    /// The AVMATRIX connection, while the switcher is an AVMATRIX.
-    private var avm: AVMatrixLink?
+    private var link: ATEMLink = .idle
 
     private enum Flag {
         static let ackRequest: UInt8 = 0x01, newSession: UInt8 = 0x02, retransmit: UInt8 = 0x04
@@ -166,42 +105,16 @@ public final class ATEMClient: ObservableObject {
     }
     private static let hello: [UInt8] = [0x10, 0x14, 0x53, 0xAB, 0, 0, 0, 0, 0, 0x3A, 0, 0, 0x01, 0, 0, 0, 0, 0, 0, 0]
 
-    public init() {}
+    init(host: String, port: UInt16 = 9910) {
+        target = host
+        self.port = port
+    }
 
     // MARK: Connection
 
-    public func connect(_ host: String, port: UInt16 = 9910, kind: SwitcherKind = .atem) {
-        let h = host.trimmingCharacters(in: .whitespaces)
-        self.host = h
-        self.kind = kind
-        link = h.isEmpty ? .idle : .connecting
-        avm?.stop()
-        avm = nil
-        if kind == .avmatrix {
-            state = ATEMState()
-            queue.async {
-                self.target = ""
-                self.timer?.cancel(); self.timer = nil
-                self.conn?.cancel(); self.conn = nil
-                self.connected = false; self.ready = false
-            }
-            guard !h.isEmpty else { return }
-            let a = AVMatrixLink(host: h)
-            a.onState = { [weak self, weak a] st in
-                DispatchQueue.main.async { if let self, self.avm === a, self.state != st { self.state = st } }
-            }
-            a.onLink = { [weak self, weak a] l in
-                DispatchQueue.main.async { if let self, self.avm === a, self.link != l { self.link = l } }
-            }
-            avm = a
-            a.start()
-            return
-        }
+    func start() {
         queue.async {
-            self.target = h
-            self.port = port
-            self.s = ATEMState()
-            self.publish()
+            self.setLink(.connecting)
             if self.timer == nil {
                 let t = DispatchSource.makeTimerSource(flags: .strict, queue: self.queue)
                 t.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(2))
@@ -209,15 +122,11 @@ public final class ATEMClient: ObservableObject {
                 t.resume()
                 self.timer = t
             }
-            if !h.isEmpty { self.open() }
+            self.open()
         }
     }
 
-    public func disconnect() {
-        host = ""
-        link = .idle
-        avm?.stop()
-        avm = nil
+    func stop() {
         queue.async {
             self.target = ""
             self.timer?.cancel(); self.timer = nil
@@ -254,7 +163,9 @@ public final class ATEMClient: ObservableObject {
     }
 
     private func setLink(_ l: ATEMLink) {
-        DispatchQueue.main.async { if self.avm == nil && self.link != l && !self.target.isEmpty { self.link = l } }
+        guard l != link, !target.isEmpty else { return }
+        link = l
+        onEvent?(.link(l))
     }
 
     private func tick() {
@@ -413,18 +324,13 @@ public final class ATEMClient: ObservableObject {
 
     /// The T-bar's rest end flips when a transition ran past halfway, as on a hardware panel.
     private func endTransition(_ me: Int) {
-        if (lastPosition[me] ?? 0) > 0.5 {
-            DispatchQueue.main.async { self.tbarAtTop[me] = !(self.tbarAtTop[me] ?? false) }
-        }
+        if (lastPosition[me] ?? 0) > 0.5 { onEvent?(.transitionEnded(me: me)) }
         s.inTransition[me] = false
         s.position[me] = 0
         lastPosition[me] = 0
     }
 
-    private func publish() {
-        let snap = s
-        DispatchQueue.main.async { if self.avm == nil && self.state != snap { self.state = snap } }
-    }
+    private func publish() { onEvent?(.state(s)) }
 
     // MARK: Commands
 
@@ -433,25 +339,16 @@ public final class ATEMClient: ObservableObject {
         return [UInt8(len >> 8), UInt8(len & 0xFF), 0, 0] + Array(name.utf8) + data
     }
 
+    func perform(_ c: SwitcherCommand) -> Bool {
+        let (name, data) = Self.encode(c)
+        let ok = queue.sync { connected && ready }
+        send(name, data)
+        return ok
+    }
+
     private func send(_ name: String, _ data: [UInt8]) {
-        if let avm {
-            // An AVMATRIX does what it has an equivalent for; the rest is logged as not sent.
-            let ok = avm.perform(name, data)
-            let entry = ATEMLogEntry(time: Date(), command: name, data: data, sent: ok)
-            DispatchQueue.main.async {
-                self.sentLog.append(entry)
-                if self.sentLog.count > 60 { self.sentLog.removeFirst(self.sentLog.count - 60) }
-            }
-            return
-        }
         queue.async {
-            let ok = self.connected && self.ready
-            let entry = ATEMLogEntry(time: Date(), command: name, data: data, sent: ok)
-            DispatchQueue.main.async {
-                self.sentLog.append(entry)
-                if self.sentLog.count > 60 { self.sentLog.removeFirst(self.sentLog.count - 60) }
-            }
-            guard ok else { return }
+            guard self.connected && self.ready else { return }
             let commands = self.command(name, data)
             self.localID = (self.localID + 1) % 32768
             let len = 12 + commands.count
@@ -466,26 +363,30 @@ public final class ATEMClient: ObservableObject {
         }
     }
 
-    private func hl(_ v: Int) -> [UInt8] { let c = UInt16(clamping: max(0, v)); return [UInt8(c >> 8), UInt8(c & 0xFF)] }
-    private func b(_ v: Int) -> UInt8 { UInt8(clamping: max(0, v)) }
+    private static func hl(_ v: Int) -> [UInt8] { let c = UInt16(clamping: max(0, v)); return [UInt8(c >> 8), UInt8(c & 0xFF)] }
+    private static func b(_ v: Int) -> UInt8 { UInt8(clamping: max(0, v)) }
 
-    public func setProgram(_ source: Int, me: Int = 0) { send("CPgI", [b(me), 0] + hl(source)) }
-    public func setPreview(_ source: Int, me: Int = 0) { send("CPvI", [b(me), 0] + hl(source)) }
-    public func cut(me: Int = 0) { send("DCut", [b(me), 0, 0, 0]) }
-    public func auto(me: Int = 0) { send("DAut", [b(me), 0, 0, 0]) }
-    /// 0 to 1 from the start of the transition.
-    public func setPosition(_ v: Double, me: Int = 0) { send("CTPs", [b(me), 0] + hl(Int((min(1, max(0, v)) * 10000).rounded()))) }
-    public func setStyle(_ style: Int, me: Int = 0) { send("CTTp", [1, b(me), b(style), 0]) }
-    public func setNextSelection(_ mask: Int, me: Int = 0) { send("CTTp", [2, b(me), 0, b(max(1, mask))]) }
-    public func setMixRate(_ frames: Int, me: Int = 0) { send("CTMx", [b(me), b(min(250, max(1, frames))), 0, 0]) }
-    public func setKeyOnAir(_ keyer: Int, _ on: Bool, me: Int = 0) { send("CKOn", [b(me), b(keyer), on ? 1 : 0, 0]) }
-    public func setDSKOnAir(_ dsk: Int, _ on: Bool) { send("CDsL", [b(dsk), on ? 1 : 0, 0, 0]) }
-    public func setDSKTie(_ dsk: Int, _ on: Bool) { send("CDsT", [b(dsk), on ? 1 : 0, 0, 0]) }
-    public func dskAuto(_ dsk: Int) { send("DDsA", [b(dsk), 0, 0, 0]) }
-    public func fadeToBlack(me: Int = 0) { send("FtbA", [b(me), 0, 0, 0]) }
-    public func setAux(_ aux: Int, _ source: Int) { send("CAuS", [1, b(aux)] + hl(source)) }
-    public func runMacro(_ index: Int) { send("MAct", hl(index) + [0, 0]) }
-    public func stopMacro() { send("MAct", [0xFF, 0xFF, 1, 0]) }
-    public func setStreaming(_ on: Bool) { send("StrR", [on ? 1 : 0, 0, 0, 0]) }
-    public func setRecording(_ on: Bool) { send("RcTM", [on ? 1 : 0, 0, 0, 0]) }
+    /// The ATEM command (four letters) and its data for a request.
+    static func encode(_ c: SwitcherCommand) -> (String, [UInt8]) {
+        switch c {
+        case .program(let src, let me): return ("CPgI", [b(me), 0] + hl(src))
+        case .preview(let src, let me): return ("CPvI", [b(me), 0] + hl(src))
+        case .cut(let me): return ("DCut", [b(me), 0, 0, 0])
+        case .auto(let me): return ("DAut", [b(me), 0, 0, 0])
+        case .position(let v, let me): return ("CTPs", [b(me), 0] + hl(Int((min(1, max(0, v)) * 10000).rounded())))
+        case .style(let style, let me): return ("CTTp", [1, b(me), b(style), 0])
+        case .nextSelection(let mask, let me): return ("CTTp", [2, b(me), 0, b(max(1, mask))])
+        case .mixRate(let frames, let me): return ("CTMx", [b(me), b(min(250, max(1, frames))), 0, 0])
+        case .keyOnAir(let keyer, let on, let me): return ("CKOn", [b(me), b(keyer), on ? 1 : 0, 0])
+        case .dskOnAir(let dsk, let on): return ("CDsL", [b(dsk), on ? 1 : 0, 0, 0])
+        case .dskTie(let dsk, let on): return ("CDsT", [b(dsk), on ? 1 : 0, 0, 0])
+        case .dskAuto(let dsk): return ("DDsA", [b(dsk), 0, 0, 0])
+        case .fadeToBlack(let me): return ("FtbA", [b(me), 0, 0, 0])
+        case .aux(let aux, let src): return ("CAuS", [1, b(aux)] + hl(src))
+        case .runMacro(let i): return ("MAct", hl(i) + [0, 0])
+        case .stopMacro: return ("MAct", [0xFF, 0xFF, 1, 0])
+        case .streaming(let on): return ("StrR", [on ? 1 : 0, 0, 0, 0])
+        case .recording(let on): return ("RcTM", [on ? 1 : 0, 0, 0, 0])
+        }
+    }
 }
