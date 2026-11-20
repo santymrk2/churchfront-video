@@ -167,6 +167,12 @@ opens the app on it without touching the setup file. Typing in the pretend switc
 window (`p 3`, `v 2`, `c`, `f`) changes it as its front panel would. `swift test` checks
 the AVMATRIX frames byte for byte against ones confirmed on real switchers.
 
+`python3 Tools/fake_ptz.py` starts three pretend VISCA cameras (UDP 52381 to 52383, TCP 5678
+to 5680) that pan, tilt, zoom, go to positions and presets, and answer position and exposure
+questions. http://localhost:8090 shows what each one points at on a drawn stage. With
+`CUEVIDEO_FAKECAMS=127.0.0.1` the app adds them on switcher inputs 1 to 3. They send no video,
+so camera tiles stay black and auto tracking can't run on them.
+
 Keys: 1 to 0 put that source-row tile on Next, Shift plus a number cuts it to Live,
 Space cuts, Return fades, arrows move the camera on Next.
 
