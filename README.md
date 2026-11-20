@@ -51,8 +51,6 @@ the same way. Another make of switcher is another driver.
   `Switcher` never passes such a command to the driver.
 - **One program at a time:** the switcher always reports to port 19522, so AVMATRIX's own
   control software has to be closed on the Mac that runs Churchfront Video.
-- **Trying it without the switcher:** `python3 Tools/fake_avmatrix.py` is a pretend one on this
-  Mac (address 127.0.0.1); typing in its window changes it as the front panel would.
 
 ## Setup file
 
@@ -161,24 +159,9 @@ runs every command, prints the state after each, and writes screenshots. Self-te
 never write to the setup file. Never run the self-test against a switcher that is
 live on a service.
 
-For an AVMATRIX, `python3 Tools/fake_avmatrix.py` starts a pretend one, and
-`CUEVIDEO_HOST=127.0.0.1 CUEVIDEO_SWITCHER=avmatrix "./Churchfront Video.app/Contents/MacOS/CueVideo"`
-opens the app on it without touching the setup file. Typing in the pretend switcher's
-window (`p 3`, `v 2`, `c`, `f`) changes it as its front panel would. `swift test` checks
-the AVMATRIX frames byte for byte against ones confirmed on real switchers.
-
-`python3 Tools/fake_ptz.py` starts three pretend VISCA cameras (UDP 52381 to 52383, TCP 5678
-to 5680) that pan, tilt, zoom, go to positions and presets, and answer position and exposure
-questions. http://localhost:8090 shows what each one points at on a drawn stage. With
-`CUEVIDEO_FAKECAMS=127.0.0.1` the app adds them on switcher inputs 1 to 3. They send no video,
-so camera tiles stay black and auto tracking can't run on them, unless:
-
-`swift run FakeCamera` sends this Mac's webcam as NDI "Fake PTZ 1", cropped to where pretend
-camera 1 points (`--camera 2` for the second, and so on). The webcam's whole picture is the
-camera's widest shot, so panning and zooming move the crop the way a real camera's picture
-moves. With `CUEVIDEO_FAKECAMS`, the app takes "Fake PTZ 1" to 3 as the pretend cameras'
-pictures on its own, so Track follows whoever is in front of the webcam. It needs NDI Tools,
-and camera access for the Terminal.
+`swift test` covers the AVMATRIX driver: its frames are checked byte for byte against ones
+confirmed on real switchers, and the app's `Switcher` runs against a pretend AVMATRIX inside
+the test.
 
 Keys: 1 to 0 put that source-row tile on Next, Shift plus a number cuts it to Live,
 Space cuts, Return fades, arrows move the camera on Next.

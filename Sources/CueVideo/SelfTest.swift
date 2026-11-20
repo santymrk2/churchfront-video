@@ -1,33 +1,11 @@
 import AppKit
 import CueATEM
-import NDIBridge
 
 /// CUEVIDEO_SELFTEST=1 with CUEVIDEO_HOST pointed at a switcher (or Tools/fake_atem.py):
 /// waits for the switcher, runs every command, prints the state after each,
 /// writes window snapshots to CUEVIDEO_SNAPSHOT (a folder), and quits.
 /// Never point it at a switcher that is live on a service.
 enum SelfTest {
-    /// With CUEVIDEO_FAKECAMS: once Tools/FakeCamera sends "Fake PTZ 1", "Fake PTZ 2" or
-    /// "Fake PTZ 3", that becomes the picture of the pretend camera on input 1, 2 or 3, so
-    /// auto tracking can run on it. Looks every few seconds; nothing is saved.
-    static func watchFakeCameraPictures(_ store: ConfigStore) {
-        DispatchQueue.global(qos: .utility).async {
-            guard ndi_load() != nil else { return }
-            var buf = [CChar](repeating: 0, count: 256 * 64)
-            while true {
-                let n = Int(ndi_sources(&buf, 64, 3000))
-                let names = (0..<n).map { i in buf.withUnsafeBufferPointer { String(cString: $0.baseAddress! + i * 256) } }
-                DispatchQueue.main.async {
-                    for input in 1...3 {
-                        guard let name = names.first(where: { $0.hasSuffix("(Fake PTZ \(input))") }), store.ndi(input) != name else { continue }
-                        store.setPicture(input, name)
-                    }
-                }
-                Thread.sleep(forTimeInterval: 3)
-            }
-        }
-    }
-
     /// CUEVIDEO_PROBE=1: connect, read everything, print it, snapshot, quit. Sends no commands,
     /// so it is safe on a real switcher.
     static func probe() {
@@ -72,7 +50,7 @@ enum SelfTest {
     static func realTest() {
         let atem = Booth.shared.atem
         guard atem.kind == .atem else {
-            print("This self-test runs ATEM commands. For an AVMATRIX: swift test, and Tools/fake_avmatrix.py with the app.")
+            print("This self-test runs ATEM commands. For an AVMATRIX, swift test covers its driver.")
             exit(2)
         }
         let only = ProcessInfo.processInfo.environment["CUEVIDEO_REALTEST"] == "trace"
@@ -241,7 +219,7 @@ enum SelfTest {
         let booth = Booth.shared
         let atem = booth.atem
         guard atem.kind == .atem else {
-            print("This self-test runs ATEM commands. For an AVMATRIX: swift test, and Tools/fake_avmatrix.py with the app.")
+            print("This self-test runs ATEM commands. For an AVMATRIX, swift test covers its driver.")
             exit(2)
         }
         let ptz = booth.ptz

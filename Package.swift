@@ -20,9 +20,6 @@ let package = Package(
         // NDI in by loading the runtime at run time (no SDK needed to build).
         .target(name: "NDIBridge", path: "Sources/NDIBridge"),
         .executableTarget(name: "CueVideoMCP", path: "Sources/CueVideoMCP"),
-        // For trying auto tracking with no PTZ camera: this Mac's webcam as NDI, cropped to
-        // where a pretend camera from Tools/fake_ptz.py points. swift run FakeCamera
-        .executableTarget(name: "FakeCamera", dependencies: ["NDIBridge"], path: "Tools/FakeCamera"),
         .executableTarget(
             name: "CueVideo",
             dependencies: ["CueATEM", "NDIBridge", .product(name: "CueDesign", package: "churchfront-kit")],
